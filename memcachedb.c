@@ -101,10 +101,9 @@ static void conn_free(conn *c);
 struct stats stats;
 struct settings settings;
 
-struct bdb_settings bdb_settings;
-struct bdb_version bdb_version;
-DB_ENV *env;
-DB *dbp;
+struct mdb_settings mdb_settings;
+MDB_env *env;
+MDB_dbi dbi;
 
 int daemon_quit = 0;
 
@@ -143,7 +142,7 @@ static void settings_init(void) {
     settings.udpport = 0;
     /* By default this string should be NULL for getaddrinfo() */
     settings.inter = NULL;
-    settings.item_buf_size = 2 * 1024;     /* default is 2KB */
+    settings.item_buf_size = 2 * 1024;    /* default is 2KB */
     settings.maxconns = 4 * 1024;         /* to limit connections-related memory to about 5MB * 4 */
     settings.verbose = 0;
     settings.socketpath = NULL;       /* by default, not using a unix socket */
@@ -649,7 +648,7 @@ static void complete_nread(conn *c) {
     stats.set_cmds++;
     STATS_UNLOCK();
 
-    if (strncmp(ITEM_data(it) + it->nbytes - 2, "\r\n", 2) != 0) {
+    if (strncmp(ITEM_end(it) - 2, "\r\n", 2) != 0) {
         out_string(c, "CLIENT_ERROR bad data chunk");
     } else {
       ret = store_item(it, comm);
@@ -674,54 +673,54 @@ static void complete_nread(conn *c) {
  * Returns true if the item was stored.
  */
 int do_store_item(item *it, int comm) {
-    char *key = ITEM_key(it);
     int ret;
-    item *old_it = NULL;
+    item old_it;
     item *new_it = NULL;
     int stored = 0;
     int flags;
+	MDB_txn *txn;
 
+    ret = mdb_txn_begin(env, NULL, 0, &txn);
+    if (ret != 0) {
+        return 0;
+    }
     if (comm == NREAD_ADD || comm == NREAD_REPLACE) {
-        ret = item_exists(key, strlen(key));
+        ret = item_exists(txn, &it->key);
         if ((ret == 0 && comm == NREAD_REPLACE) ||
             (ret == 1 && comm == NREAD_ADD) ){
                return 0;
         }
     } else if (comm == NREAD_APPEND || comm == NREAD_PREPEND){
         /* get orignal item */
-        old_it = item_get(key, strlen(key));
-        if (old_it == NULL){
+        ret = item_get(txn, &it->key, &old_it);
+        if (ret) {
             return 0;
         }
         
         /* we have it and old_it here - alloc memory to hold both */
         /* flags was already lost - so recover them from ITEM_suffix(it) */
-        flags = (int) strtol(ITEM_suffix(old_it), (char **) NULL, 10);        
-        new_it = item_alloc1(key, it->nkey, flags, it->nbytes + old_it->nbytes - 2 /* CRLF */);
+        flags = (int) strtol(ITEM_suffix(&old_it), (char **) NULL, 10);        
+        new_it = item_alloc1(&it->key, flags, ITEM_dlen(it) + ITEM_dlen(&old_it) - 2 /* CRLF */);
         if (new_it == NULL) {
             /* SERVER_ERROR out of memory */
-            if (old_it != NULL)
-                item_free(old_it);
             return 0;
         }
         
         /* copy data from it and old_it to new_it */        
         if (comm == NREAD_APPEND) {
-            memcpy(ITEM_data(new_it), ITEM_data(old_it), old_it->nbytes);
-            memcpy(ITEM_data(new_it) + old_it->nbytes - 2 /* CRLF */, ITEM_data(it), it->nbytes);
+            memcpy(ITEM_data(new_it), ITEM_data(&old_it), ITEM_dlen(&old_it));
+            memcpy(ITEM_data(new_it) + ITEM_dlen(&old_it) - 2 /* CRLF */, ITEM_data(it), ITEM_dlen(it));
         } else {
             /* NREAD_PREPEND */
-            memcpy(ITEM_data(new_it), ITEM_data(it), it->nbytes);
-            memcpy(ITEM_data(new_it) + it->nbytes - 2 /* CRLF */, ITEM_data(old_it), old_it->nbytes);
+            memcpy(ITEM_data(new_it), ITEM_data(it), ITEM_dlen(it));
+            memcpy(ITEM_data(new_it) + ITEM_dlen(it) - 2 /* CRLF */, ITEM_data(&old_it), ITEM_dlen(&old_it));
         }
         
         it = new_it;
     }
         
-    ret = item_put(key, strlen(key), it);
+    ret = item_put(txn, it);
     
-    if (old_it != NULL)
-        item_free(old_it);
     if (new_it != NULL)
         item_free(new_it);
 
@@ -733,8 +732,8 @@ int do_store_item(item *it, int comm) {
 }
 
 typedef struct token_s {
-    char *value;
     size_t length;
+    char *value;
 } token_t;
 
 #define COMMAND_TOKEN 0
@@ -872,39 +871,11 @@ static void process_stat(conn *c, token_t *tokens, const size_t ntokens) {
     }
 
     /* for bdb stats */
-    if (strcmp(subcommand, "bdb") == 0) {
+    if (strcmp(subcommand, "mdb") == 0) {
         char temp[512];
-        stats_bdb(temp);
+        stats_mdb(temp);
         out_string(c, temp);
         return;
-    }
-    
-    /* for replication stats */
-    if (bdb_settings.is_replicated){
-        if (strcmp(subcommand, "rep") == 0) {
-            char temp[2048];
-            stats_rep(temp);
-            out_string(c, temp);
-            return;
-        }
-        if (strcmp(subcommand, "repmgr") == 0) {
-            char temp[256];
-            stats_repmgr(temp);
-            out_string(c, temp);
-            return;
-        }
-        if (strcmp(subcommand, "repcfg") == 0) {
-            char temp[512];
-            stats_repcfg(temp);
-            out_string(c, temp);
-            return;
-        }
-        if (strcmp(subcommand, "repms") == 0) {
-            char temp[256];
-            stats_repms(temp);
-            out_string(c, temp);
-            return;
-        }
     }
 
     out_string(c, "ERROR");
@@ -1027,16 +998,13 @@ static inline void process_get_command(conn *c, token_t *tokens, size_t ntokens)
 }
 
 static inline void process_rget_command(conn *c, token_t *tokens, size_t ntokens) {
-    char *start;
-    size_t nstart;
-    char *end;
-    size_t nend;
     bool is_left_open;
     bool is_right_open;
     uint32_t max_items;
     
-    DB_TXN *txn = NULL;
-    DBC *cursorp = NULL;
+    MDB_txn *txn = NULL;
+    MDB_cursor *cursorp = NULL;
+	MDB_val *start, *end, itv;
     
     int i = 0;
     int ret = 0;
@@ -1045,12 +1013,10 @@ static inline void process_rget_command(conn *c, token_t *tokens, size_t ntokens
 
     assert(c != NULL);
     
-    start = tokens[1].value;
-    nstart = tokens[1].length;
-    end = tokens[2].value;
-    nend = tokens[2].length;
+	start = (MDB_val *)&tokens[1];
+	end = (MDB_val *)&tokens[2];
 
-    if(nstart > KEY_MAX_LENGTH || nend > KEY_MAX_LENGTH) {
+    if(start.mv_size > KEY_MAX_LENGTH || end.mv_size > KEY_MAX_LENGTH) {
         out_string(c, "CLIENT_ERROR bad command line format");
         return;
     }
@@ -1064,28 +1030,30 @@ static inline void process_rget_command(conn *c, token_t *tokens, size_t ntokens
         return;
     }
     
-    /* transcation and cursor */
-    ret = env->txn_begin(env, NULL, &txn, 0);
+    /* transaction and cursor */
+    ret = mdb_txn_begin(env, NULL, MDB_RDONLY, &txn);
     if (ret != 0) {
-        fprintf(stderr, "envp->txn_begin: %s\n", db_strerror(ret));
-        out_string(c, "SERVER_ERROR envp->txn_begin");
+        fprintf(stderr, "mdb_txn_begin: %s\n", mdb_strerror(ret));
+        out_string(c, "SERVER_ERROR mdb_txn_begin");
         return;
     }
     
-    /* Get a cursor, we use 2 degree isolation */
-    ret = dbp->cursor(dbp, txn, &cursorp, DB_READ_COMMITTED); 
+    /* Get a cursor */
+    ret = mdb_cursor_open(txn, dbi, &cursorp);
     if (ret != 0) {
-        fprintf(stderr, "dbp->cursor: %s\n", db_strerror(ret));
-        out_string(c, "SERVER_ERROR dbp->cursor");
+        fprintf(stderr, "mdb_cursor_open: %s\n", mdb_strerror(ret));
+        out_string(c, "SERVER_ERROR mdb_cursor_open");
         return;
     }
     
-    it = item_cget(cursorp, start, nstart, DB_SET_RANGE);
+    it = item_cget(cursorp, start, MDB_SET_RANGE);
 
     while(it) {
+		itv.mv_data = ITEM_key(it);
+		itv.mv_size = it->nkey;
         /* skip first item? */
         if (!is_left_checked && is_left_open &&
-             0 == bdb_defcmp(start, nstart, ITEM_key(it), it->nkey)){
+             0 == mdb_cmp(txn, dbi, start, &itv)){
             item_free(it);
             it = NULL;
             is_left_checked = true;
@@ -1094,14 +1062,14 @@ static inline void process_rget_command(conn *c, token_t *tokens, size_t ntokens
         }
     
         /* got the end? */
-        ret = bdb_defcmp(end, nend, ITEM_key(it), it->nkey);
+        ret = mdb_cmp(txn, dbi, end, &itv);
         if (ret < 0 || (ret == 0 && is_right_open)){
             item_free(it);
             it = NULL;
             break;
         }
                 
-        /* let vaild item out */
+        /* let valid item out */
         if (i >= c->isize) {
             item **new_list = realloc(c->ilist, sizeof(item *) * c->isize * 2);
             if (new_list) {
@@ -1141,19 +1109,15 @@ static inline void process_rget_command(conn *c, token_t *tokens, size_t ntokens
             break;
         }
         /* move to the next item */    
-        it = item_cget(cursorp, NULL, 0, DB_NEXT);
+        it = item_cget(cursorp, NULL, MDB_NEXT);
     }
     
     if (cursorp != NULL){
-        cursorp->close(cursorp);
+        mdb_cursor_close(cursorp);
     }
 
-    /* txn commit */
-    ret = txn->commit(txn, 0);
-    if (ret != 0) {
-        fprintf(stderr, "txn->commit: %s\n", db_strerror(ret));
-        txn->abort(txn);
-    }
+    /* txn end */
+    ret = mdb_txn_abort(txn);
     
     c->icurr = c->ilist;
     c->ileft = i;
@@ -1178,8 +1142,7 @@ static inline void process_rget_command(conn *c, token_t *tokens, size_t ntokens
 }
 
 static void process_update_command(conn *c, token_t *tokens, const size_t ntokens, int comm) {
-    char *key;
-    size_t nkey;
+	MDB_val *key;
     int flags;
     time_t exptime;
     int vlen;
@@ -1192,8 +1155,7 @@ static void process_update_command(conn *c, token_t *tokens, const size_t ntoken
         return;
     }
 
-    key = tokens[KEY_TOKEN].value;
-    nkey = tokens[KEY_TOKEN].length;
+	key = (MDB_val *)&tokens[KEY_TOKEN];
 
     flags = strtoul(tokens[2].value, NULL, 10);
     exptime = strtol(tokens[3].value, NULL, 10);
@@ -1205,7 +1167,7 @@ static void process_update_command(conn *c, token_t *tokens, const size_t ntoken
         return;
     }
 
-    it = item_alloc1(key, nkey, flags, vlen+2);
+    it = item_alloc1(key, flags, vlen+2);
 
     if (it == NULL) {
         out_string(c, "SERVER_ERROR out of memory storing object");
@@ -1403,37 +1365,14 @@ static void process_rep_command(conn *c, token_t *tokens, const size_t ntokens) 
     return;
 }
 
-static void process_bdb_command(conn *c, token_t *tokens, const size_t ntokens) {
+static void process_mdb_command(conn *c, token_t *tokens, const size_t ntokens) {
 	int ret;
     assert(c != NULL);
 
-    if (strcmp(tokens[COMMAND_TOKEN].value, "db_archive") == 0){
-        if(0 != (ret = env->log_archive(env, NULL, DB_ARCH_REMOVE))){
+    if (strcmp(tokens[COMMAND_TOKEN].value, "db_checkpoint") == 0){
+        if(0 != (ret = mdb_env_sync(env, 1))){
             if (settings.verbose > 1) {
-                fprintf(stderr, "env->log_archive: %s\n", db_strerror(ret));
-			}
-            out_string(c, "ERROR");
-        }else{
-            out_string(c, "OK");
-        }
-        return;
-    
-    }else if (strcmp(tokens[COMMAND_TOKEN].value, "db_checkpoint") == 0){
-        if(0 != (ret = env->txn_checkpoint(env, 0, 0, 0))){
-            if (settings.verbose > 1) {
-                fprintf(stderr, "env->txn_checkpoint: %s\n", db_strerror(ret));
-			}
-            out_string(c, "ERROR");
-        }else{
-            out_string(c, "OK");
-        }
-        return;
-    
-    }else if (strcmp(tokens[COMMAND_TOKEN].value, "db_compact") == 0){
-		DB_COMPACT c_data;
-        if(0 != (ret = dbp->compact(dbp, NULL, NULL, NULL, &c_data, DB_FREE_SPACE, NULL))){
-            if (settings.verbose > 1) {
-                fprintf(stderr, "dbp->compact: %s\n", db_strerror(ret));
+                fprintf(stderr, "mdb_env_sync: %s\n", mdb_strerror(ret));
 			}
             out_string(c, "ERROR");
         }else{
@@ -1522,17 +1461,10 @@ static void process_command(conn *c, char *command) {
 
         process_verbosity_command(c, tokens, ntokens);
 
-    } else if (ntokens == 3 && ((strcmp(tokens[COMMAND_TOKEN].value, "rep_set_ack_policy") == 0) ||
-                                (strcmp(tokens[COMMAND_TOKEN].value, "rep_set_priority") == 0) )) {
-
-        process_rep_command(c, tokens, ntokens);
-
     } else if (ntokens == 2 && 
-              ((strcmp(tokens[COMMAND_TOKEN].value, "db_archive") == 0 ) ||
-               (strcmp(tokens[COMMAND_TOKEN].value, "db_checkpoint") == 0 ) ||
-               (strcmp(tokens[COMMAND_TOKEN].value, "db_compact") == 0 ))) {
+              (strcmp(tokens[COMMAND_TOKEN].value, "db_checkpoint") == 0 )) {
 
-        process_bdb_command(c, tokens, ntokens);
+        process_mdb_command(c, tokens, ntokens);
 
     } else {
         out_string(c, "ERROR");
@@ -2276,26 +2208,10 @@ static void usage(void) {
 #ifdef USE_THREADS
     printf("-t <num>      number of threads to use, default 4\n");
 #endif
-    printf("--------------------BerkeleyDB Options-------------------------------\n");
-    printf("-m <num>      in-memmory cache size of BerkeleyDB in megabytes, default is 256MB\n");
-    printf("-A <num>      underlying page size in bytes, default is 4096, (512B ~ 64KB, power-of-two)\n");
-    printf("-f <file>     filename of database, default is 'data.db'\n");
+    printf("--------------------MDB Options-------------------------------\n");
     printf("-H <dir>      env home of database, default is '/data1/memcachedb'\n");
-    printf("-G <dir>      log dir of database, default is the same as env home\n");
-    printf("-B <db_type>  type of database, 'btree' or 'hash'. default is 'btree'\n");
-    printf("-L <num>      log buffer size in kbytes, default is 4MB\n");
-    printf("-C <num>      do checkpoint every <num> seconds, 0 for disable, default is 5 minutes\n");
-    printf("-T <num>      do memp_trickle every <num> seconds, 0 for disable, default is 30 seconds\n");
-    printf("-e <num>      percent of the pages in the cache that should be clean, default is 60%%\n");
-    printf("-D <num>      do deadlock detecting every <num> millisecond, 0 for disable, default is 100ms\n");
-    printf("-N            enable DB_TXN_NOSYNC to gain big performance improved, default is off\n");
-    printf("-E            automatically remove log files that are no longer needed\n");
-    printf("-X            allocate region memory from the heap, default is off\n");
-    printf("--------------------Replication Options-------------------------------\n");
-    printf("-R            identifies the host and port used by this site (required).\n");
-    printf("-O            identifies another site participating in this replication group\n");
-    printf("-M/-S         start as a master or slave\n");
-    printf("-n            number of sites that participat in replication, default is 2\n");
+    printf("-N            enable MDB_TXN_NOSYNC to gain big performance improved, default is off\n");
+    printf("-C <num>      do checkpoint every <num> seconds, only needed if NOSYNC is enabled\n");
     printf("-----------------------------------------------------------------------\n");
 
     return;
@@ -2304,6 +2220,12 @@ static void usage(void) {
 static void usage_license(void) {
     printf(PACKAGE " " VERSION "\n\n");
     printf(
+    "Copyright (c) 2012, Howard Chu. <hyc@symas.com>\n"
+    "All rights reserved.\n"
+    "\n"
+    "Redistribution allowed under the terms of the OpenLDAP Public License.\n"
+    "\n"
+    "\n"
     "Copyright (c) 2008, Steve Chu. <stvchu@gmail.com>\n"
     "All rights reserved.\n"
     "\n"
@@ -2404,13 +2326,6 @@ static void usage_license(void) {
     "(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF\n"
     "THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.\n"
     "\n"
-    "\n"
-    "This product includes software developed by Oracle Inc.\n"
-    "\n"
-    "[ BerkeleyDB ]\n"
-    "\n"
-    "See LICENSE file in BerkeleyDB distribution to get more Copyright info.\n"
-    "\n"
     );
 
     return;
@@ -2497,10 +2412,7 @@ int main (int argc, char **argv) {
 
     /* init settings */
     settings_init();
-    bdb_settings_init();
-
-    /* get Berkeley DB version*/
-    db_version(&(bdb_version.majver), &(bdb_version.minver), &(bdb_version.patch));
+    mdb_settings_init();
 
     /* set stderr non-buffering (for running under, say, daemontools) */
     setbuf(stderr, NULL);
@@ -2568,95 +2480,14 @@ int main (int argc, char **argv) {
                 fprintf(stderr, "Warning: item buffer size(-b) larger than 256KB may cause performance issue\n");
             } 
             break;
-        case 'f':
-            bdb_settings.db_file = optarg;
-            break;
         case 'H':
             bdb_settings.env_home = optarg;
-            break;
-        case 'G':
-            bdb_settings.log_home = optarg;
-            break;
-        case 'B':
-            if (0 == strcmp(optarg, "btree")){
-                bdb_settings.db_type = DB_BTREE;
-            }else if (0 == strcmp(optarg, "hash")){
-                bdb_settings.db_type = DB_HASH;
-            }else{
-                fprintf(stderr, "Unknown databasetype, only 'btree' or 'hash' is available.\n");
-                exit(EXIT_FAILURE);
-            }
-            break;
-        case 'm':
-            bdb_settings.cache_size = atoi(optarg) * 1024uLL * 1024uLL;
-            break;
-        case 'A':
-            bdb_settings.page_size = atoi(optarg);
-            break;
-        case 'L':
-            bdb_settings.txn_lg_bsize = atoi(optarg) * 1024;
             break;
         case 'C':
             bdb_settings.chkpoint_val = atoi(optarg);
             break;
-        case 'T':
-            bdb_settings.memp_trickle_val = atoi(optarg);
-            break;
-        case 'e':
-            bdb_settings.memp_trickle_percent = atoi(optarg);
-            if (bdb_settings.memp_trickle_percent < 0 || 
-                bdb_settings.memp_trickle_percent > 100){
-                fprintf(stderr, "memp_trickle_percent should be 0 ~ 100.\n");
-                exit(EXIT_FAILURE);
-            }
-            break;
-        case 'D':
-            bdb_settings.dldetect_val = atoi(optarg) * 1000;
-            break;
         case 'N':
             bdb_settings.txn_nosync = 1;
-            break;
-        case 'E':
-            bdb_settings.log_auto_remove = 1;
-            break;
-        case 'X':
-            bdb_settings.env_flags |= DB_PRIVATE;
-            break;
-        case 'M':
-            if (bdb_settings.rep_start_policy == DB_REP_CLIENT){
-                fprintf(stderr, "Can't not be a Master and Slave at same time.\n");
-                exit(EXIT_FAILURE);
-            }else{
-               bdb_settings.rep_start_policy = DB_REP_MASTER;
-            }
-            break;
-       case 'S':
-            if (bdb_settings.rep_start_policy == DB_REP_MASTER){
-                fprintf(stderr, "Can't not be a Master and Slave at same time.\n");
-                exit(EXIT_FAILURE);
-            }else{
-               bdb_settings.rep_start_policy = DB_REP_CLIENT;
-            }
-            break;
-        case 'R':
-           bdb_settings.is_replicated = 1;
-           bdb_settings.rep_localhost = strtok(optarg, ":");
-            if ((portstr = strtok(NULL, ":")) == NULL) {
-                fprintf(stderr, "Bad host specification.\n");
-                exit(EXIT_FAILURE);
-            }
-           bdb_settings.rep_localport = (unsigned short)atoi(portstr);
-            break;
-        case 'O':
-            bdb_settings.rep_remotehost = strtok(optarg, ":");
-            if ((portstr = strtok(NULL, ":")) == NULL) {
-                fprintf(stderr, "Bad host specification.\n");
-                exit(EXIT_FAILURE);
-            }
-            bdb_settings.rep_remoteport = (unsigned short)atoi(portstr);
-            break;
-        case 'n':
-            bdb_settings.rep_nsites = atoi(optarg);
             break;
 
         default:
@@ -2795,23 +2626,19 @@ int main (int argc, char **argv) {
         }
     }
     
-    /* here we init bdb env and open db */
-    bdb_env_init();
-    bdb_db_open();
+    /* here we setup mdb env */
+    mdb_setup();
 
     /* start checkpoint and deadlock detect thread */
     start_chkpoint_thread();
-    start_memp_trickle_thread();
-    start_dl_detect_thread();
 
     /* enter the event loop */
     event_base_loop(main_base, 0);
     
     /* cleanup bdb staff */
     fprintf(stderr, "try to clean up bdb resource...\n");
-    bdb_chkpoint();
-    bdb_db_close();
-    bdb_env_close();
+    mdb_chkpoint();
+	mdb_shutdown();
     
     /* remove the PID file if we're a daemon */
     if (daemonize)
