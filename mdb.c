@@ -51,7 +51,7 @@ void mdb_setup(void){
         fprintf(stderr, "32bit box only max 2GB memory pool allowed\n");
         exit(EXIT_FAILURE);
     }
-	ret = mdb_env_set_mapsize(env, mdb_settings.cache_size * 1024uLL * 1024uLL);
+	ret = mdb_env_set_mapsize(env, mdb_settings.cache_size);
     
 	/* check readers */
 	mdb_env_get_maxreaders(env, &readers);

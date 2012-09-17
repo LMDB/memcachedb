@@ -116,7 +116,7 @@ int do_item_add_to_freelist(item *it) {
 static size_t item_make_header(const uint8_t nkey, const int flags, const int nbytes,
                      char *suffix, uint8_t *nsuffix) {
     *nsuffix = (uint8_t) snprintf(suffix, SUFFLEN, " %d %d\r\n", flags, nbytes - 2);
-    return sizeof(item) + nkey + *nsuffix + nbytes;
+    return sizeof(item) + nkey + *nsuffix + nbytes + 1;
 }
 
 /*
