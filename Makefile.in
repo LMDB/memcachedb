@@ -51,7 +51,7 @@ CONFIG_CLEAN_VPATH_FILES =
 am__installdirs = "$(DESTDIR)$(bindir)"
 PROGRAMS = $(bin_PROGRAMS)
 am_memcachedb_OBJECTS = memcachedb.$(OBJEXT) item.$(OBJEXT) \
-	thread.$(OBJEXT) mdb.$(OBJEXT) stats.$(OBJEXT)
+	thread.$(OBJEXT) mdbaux.$(OBJEXT) stats.$(OBJEXT)
 memcachedb_OBJECTS = $(am_memcachedb_OBJECTS)
 memcachedb_LDADD = $(LDADD)
 DEFAULT_INCLUDES = -I.@am__isrc@
@@ -205,7 +205,7 @@ target_alias = @target_alias@
 top_build_prefix = @top_build_prefix@
 top_builddir = @top_builddir@
 top_srcdir = @top_srcdir@
-memcachedb_SOURCES = memcachedb.c item.c memcachedb.h thread.c mdb.c stats.c
+memcachedb_SOURCES = memcachedb.c item.c memcachedb.h thread.c mdbaux.c stats.c
 SUBDIRS = doc tools conf
 EXTRA_DIST = doc tools conf CREDITS AUTHORS LICENSE
 all: config.h
@@ -310,7 +310,7 @@ distclean-compile:
 	-rm -f *.tab.c
 
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/item.Po@am__quote@
-@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/mdb.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/mdbaux.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/memcachedb.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/stats.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/thread.Po@am__quote@
