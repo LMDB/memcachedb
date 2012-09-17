@@ -1,5 +1,9 @@
 /*
- *  MemcacheDB - A distributed key-value storage system designed for persistent:
+ *  MemcacheDB - A distributed key-value storage system designed for persistence:
+ *
+ *      https://gitorious.org/mdb/memcachedb
+ *
+ *  Based on the BerkeleyDB version at:
  *
  *      http://memcachedb.googlecode.com
  *
@@ -7,6 +11,7 @@
  *
  *      http://danga.com/memcached/
  *
+ *  Copyright 2012 Howard Chu.  All rights reserved.
  *  Copyright 2008 Steve Chu.  All rights reserved.
  *
  *  Use and distribution licensed under the BSD license.  See
@@ -14,6 +19,7 @@
  *
  *  Authors:
  *      Steve Chu <stvchu@gmail.com>
+ *      Howard Chu <hyc@symas.com>
  *
  */
  
@@ -27,6 +33,7 @@
 #include <netinet/in.h>
 #include <event.h>
 #include <netdb.h>
+#include <inttypes.h>
 #include <mdb.h>
 
 #define DATA_BUFFER_SIZE 2048
@@ -154,6 +161,7 @@ typedef struct item {
 
 
 /* warning: don't use these macros with a function, as it evals its arg twice */
+#define ITEM_key(item) ((char*)(item)->key.mv_data)
 #define ITEM_suflen(item) (((ditem *)((item)->data.mv_data))->nsuffix)
 #define ITEM_suffix(item) (((ditem *)((item)->data.mv_data))->buf)
 #define ITEM_data(item) ((char *)(ITEM_suffix(item) + ITEM_suflen(item)))
@@ -230,11 +238,6 @@ struct conn {
     int    msgcurr;   /* element in msglist[] being transmitted now */
     int    msgbytes;  /* number of bytes in current msg */
 
-    item   **ilist;   /* list of items to write out */
-    int    isize;
-    item   **icurr;
-    int    ileft;
-
     /* data for UDP clients */
     bool   udp;       /* is this is a UDP "connection" */
     int    request_id; /* Incoming UDP request ID, if this is a UDP "connection" */
@@ -261,13 +264,14 @@ void item_init(void);
 item *do_item_from_freelist(void);
 int do_item_add_to_freelist(item *it);
 item *item_alloc1(MDB_val *key, const int flags, const int nbytes);
+int item_alloc_put(MDB_txn *txn, MDB_val *key, const int flags, const int nbytes, item *it);
 item *item_alloc2(size_t ntotal);
 int item_free(item *it);
 int item_get(MDB_txn *txn, MDB_val *key, item *it);
 int item_put(MDB_txn *txn, item *it);
 int item_delete(MDB_txn *txn, MDB_val *key);
 int item_exists(MDB_txn *txn, MDB_val *key);
-item *item_cget(MDB_cursor *cursorp, MDB_val *key, u_int32_t flags);
+int item_cget(MDB_cursor *cursorp, MDB_val *key, item *it, u_int32_t flags);
 
 /* mdb related stats */
 void stats_mdb(char *temp);
@@ -300,7 +304,7 @@ int  dispatch_event_add(int thread, conn *c);
 void dispatch_conn_new(int sfd, int init_state, int event_flags, int read_buffer_size, int is_udp);
 
 /* Lock wrappers for cache functions that are called from main loop. */
-char *mt_add_delta(const int incr, const int64_t delta, char *buf, char *key, size_t nkey);
+char *mt_add_delta(const int incr, const int64_t delta, char *buf, MDB_val *key);
 conn *mt_conn_from_freelist(void);
 bool  mt_conn_add_to_freelist(conn *c);
 int   mt_is_listen_thread(void);
@@ -310,7 +314,7 @@ void  mt_stats_lock(void);
 void  mt_stats_unlock(void);
 int   mt_store_item(item *item, int comm);
 
-# define add_delta(x,y,z,a,b)        mt_add_delta(x,y,z,a,b)
+# define add_delta(x,y,z,k)        mt_add_delta(x,y,z,k)
 # define conn_from_freelist()        mt_conn_from_freelist()
 # define conn_add_to_freelist(x)     mt_conn_add_to_freelist(x)
 # define is_listen_thread()          mt_is_listen_thread()
@@ -323,7 +327,7 @@ int   mt_store_item(item *item, int comm);
 
 #else /* !USE_THREADS */
 
-# define add_delta(x,y,z,a,b)         do_add_delta(x,y,z,a,b)
+# define add_delta(x,y,z,k)         do_add_delta(x,y,z,k)
 # define conn_from_freelist()         do_conn_from_freelist()
 # define conn_add_to_freelist(x)      do_conn_add_to_freelist(x)
 # define dispatch_conn_new(x,y,z,a,b) conn_new(x,y,z,a,b,main_base)

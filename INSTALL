@@ -1,19 +1,18 @@
 Dependencies
 ============
-Before deploying Memcachedb, make sure that following packages installed:
+Before deploying Memcachedb, make sure the following packages are installed:
 
-Berkeley DB 4.7 or later
+OpenLDAP 2.4.33 or later libmdb
 -------------------------
-http://www.oracle.com/database/berkeley-db/db/index.html
+http://www.openldap.org
 
-How to install BerkekeyDB:
+How to install MDB:
 
-$tar xvzf db-4.7.25.tar.gz
-$cd db-4.7.25/
-$cd build_unix/
-$../dist/configure
+$tar xvzf openldap-2.4.33.tgz
+$cd openldap=2.4.33/libraries/libmdb
 $make
-$sudo make install
+$sudo cp mdb.h /usr/local/include
+$sudo cp libmdb.* /usr/local/lib
 
 
 libevent 1.3e or later
@@ -28,10 +27,9 @@ $./configure
 $make
 $sudo make install
 
-Load .so file by add two line in /etc/ld.so.conf:
+Load .so file by adding a line in /etc/ld.so.conf:
 
   /usr/local/lib
-  /usr/local/BerkeleyDB.4.7/lib
 
 Then, run 'ldconfig'.
 
@@ -53,15 +51,5 @@ Running Examples:
 1. run as a single daemon
 
   memcachedb -p21201 -d -r -H /data1/21201 -N -v >/data1/21201.log 2>&1
-
-2. run as a replicated group
-
-  start a master (read&write):
-
-    memcachedb -p21201 -d -r -H /data1/21201 -N -R 127.0.0.1:31201 -M -n 2 -v >/data1/21201.log 2>&1
-
-  then, start a replcas (read-only):
-
-    memcachedb -p21202 -d -r -H /data1/21202 -N -R 127.0.0.1:31202 -O 127.0.0.1:31201 -S -n 2 -v >/data1/21202.log 2>&1
 
 Have fun :)

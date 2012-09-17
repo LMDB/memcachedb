@@ -1,5 +1,5 @@
 bin_PROGRAMS = memcachedb
-memcachedb_SOURCES = memcachedb.c item.c memcachedb.h thread.c bdb.c stats.c
+memcachedb_SOURCES = memcachedb.c item.c memcachedb.h thread.c mdb.c stats.c
 
 SUBDIRS = doc tools conf
 EXTRA_DIST = doc tools conf CREDITS AUTHORS LICENSE

@@ -1,5 +1,9 @@
 /*
- *  MemcacheDB - A distributed key-value storage system designed for persistent:
+ *  MemcacheDB - A distributed key-value storage system designed for persistence:
+ *
+ *      https://gitorious.org/mdb/memcachedb
+ *
+ *  Based on the BerkeleyDB version at:
  *
  *      http://memcachedb.googlecode.com
  *
@@ -7,6 +11,7 @@
  *
  *      http://danga.com/memcached/
  *
+ *  Copyright 2012 Howard Chu.  All rights reserved.
  *  Copyright 2008 Steve Chu.  All rights reserved.
  *
  *  Use and distribution licensed under the BSD license.  See
@@ -14,6 +19,7 @@
  *
  *  Authors:
  *      Steve Chu <stvchu@gmail.com>
+ *      Howard Chu <hyc@symas.com>
  *
  */
 
@@ -262,25 +268,22 @@ conn *conn_new(const int sfd, const int init_state, const int event_flags,
             return NULL;
         }
         c->rbuf = c->wbuf = 0;
-        c->ilist = 0;
         c->iov = 0;
         c->msglist = 0;
         c->hdrbuf = 0;
 
         c->rsize = read_buffer_size;
         c->wsize = DATA_BUFFER_SIZE;
-        c->isize = ITEM_LIST_INITIAL;
         c->iovsize = IOV_LIST_INITIAL;
         c->msgsize = MSG_LIST_INITIAL;
         c->hdrsize = 0;
 
         c->rbuf = (char *)malloc((size_t)c->rsize);
         c->wbuf = (char *)malloc((size_t)c->wsize);
-        c->ilist = (item **)malloc(sizeof(item *) * c->isize);
         c->iov = (struct iovec *)malloc(sizeof(struct iovec) * c->iovsize);
         c->msglist = (struct msghdr *)malloc(sizeof(struct msghdr) * c->msgsize);
 
-        if (c->rbuf == 0 || c->wbuf == 0 || c->ilist == 0 || c->iov == 0 ||
+        if (c->rbuf == 0 || c->wbuf == 0 || c->iov == 0 ||
                 c->msglist == 0) {
             conn_free(c);
             fprintf(stderr, "malloc()\n");
@@ -309,8 +312,6 @@ conn *conn_new(const int sfd, const int init_state, const int event_flags,
     c->wcurr = c->wbuf;
     c->rcurr = c->rbuf;
     c->ritem = 0;
-    c->icurr = c->ilist;
-    c->ileft = 0;
     c->iovused = 0;
     c->msgcurr = 0;
     c->msgused = 0;
@@ -347,12 +348,6 @@ static void conn_cleanup(conn *c) {
         c->item = 0;
     }
 
-    if (c->ileft != 0) {
-        for (; c->ileft > 0; c->ileft--,c->icurr++) {
-            item_free(*(c->icurr));
-        }
-    }
-
     if (c->write_and_free) {
         free(c->write_and_free);
         c->write_and_free = 0;
@@ -372,8 +367,6 @@ void conn_free(conn *c) {
             free(c->rbuf);
         if (c->wbuf)
             free(c->wbuf);
-        if (c->ilist)
-            free(c->ilist);
         if (c->iov)
             free(c->iov);
         free(c);
@@ -434,15 +427,6 @@ static void conn_shrink(conn *c) {
         }
         /* TODO check other branch... */
         c->rcurr = c->rbuf;
-    }
-
-    if (c->isize > ITEM_LIST_HIGHWAT) {
-        item **newbuf = (item**) realloc((void *)c->ilist, ITEM_LIST_INITIAL * sizeof(c->ilist[0]));
-        if (newbuf) {
-            c->ilist = newbuf;
-            c->isize = ITEM_LIST_INITIAL;
-        }
-    /* TODO check error condition? */
     }
 
     if (c->msgsize > MSG_LIST_HIGHWAT) {
@@ -675,7 +659,6 @@ static void complete_nread(conn *c) {
 int do_store_item(item *it, int comm) {
     int ret;
     item old_it;
-    item *new_it = NULL;
     int stored = 0;
     int flags;
 	MDB_txn *txn;
@@ -684,49 +667,50 @@ int do_store_item(item *it, int comm) {
     if (ret != 0) {
         return 0;
     }
-    if (comm == NREAD_ADD || comm == NREAD_REPLACE) {
-        ret = item_exists(txn, &it->key);
-        if ((ret == 0 && comm == NREAD_REPLACE) ||
-            (ret == 1 && comm == NREAD_ADD) ){
-               return 0;
-        }
-    } else if (comm == NREAD_APPEND || comm == NREAD_PREPEND){
+    if (comm == NREAD_APPEND || comm == NREAD_PREPEND){
+		item new_it;
         /* get orignal item */
         ret = item_get(txn, &it->key, &old_it);
         if (ret) {
-            return 0;
+            goto fail;
         }
         
         /* we have it and old_it here - alloc memory to hold both */
         /* flags was already lost - so recover them from ITEM_suffix(it) */
         flags = (int) strtol(ITEM_suffix(&old_it), (char **) NULL, 10);        
-        new_it = item_alloc1(&it->key, flags, ITEM_dlen(it) + ITEM_dlen(&old_it) - 2 /* CRLF */);
-        if (new_it == NULL) {
+        ret = item_alloc_put(txn, &it->key, flags, ITEM_dlen(it) + ITEM_dlen(&old_it) - 2 /* CRLF */,
+			&new_it);
+        if (ret) {
             /* SERVER_ERROR out of memory */
-            return 0;
+            goto fail;
         }
         
         /* copy data from it and old_it to new_it */        
         if (comm == NREAD_APPEND) {
-            memcpy(ITEM_data(new_it), ITEM_data(&old_it), ITEM_dlen(&old_it));
-            memcpy(ITEM_data(new_it) + ITEM_dlen(&old_it) - 2 /* CRLF */, ITEM_data(it), ITEM_dlen(it));
+            memcpy(ITEM_data(&new_it), ITEM_data(&old_it), ITEM_dlen(&old_it));
+            memcpy(ITEM_data(&new_it) + ITEM_dlen(&old_it) - 2 /* CRLF */, ITEM_data(it), ITEM_dlen(it));
         } else {
             /* NREAD_PREPEND */
-            memcpy(ITEM_data(new_it), ITEM_data(it), ITEM_dlen(it));
-            memcpy(ITEM_data(new_it) + ITEM_dlen(it) - 2 /* CRLF */, ITEM_data(&old_it), ITEM_dlen(&old_it));
+            memcpy(ITEM_data(&new_it), ITEM_data(it), ITEM_dlen(it));
+            memcpy(ITEM_data(&new_it) + ITEM_dlen(it) - 2 /* CRLF */, ITEM_data(&old_it), ITEM_dlen(&old_it));
         }
-        
-        it = new_it;
-    }
-        
-    ret = item_put(txn, it);
-    
-    if (new_it != NULL)
-        item_free(new_it);
+    } else {
+		if (comm == NREAD_ADD || comm == NREAD_REPLACE) {
+			ret = item_exists(txn, &it->key);
+			if ((ret == 0 && comm == NREAD_REPLACE) ||
+				(ret == 1 && comm == NREAD_ADD) ){
+				   goto fail;
+			}
+		}
+		ret = item_put(txn, it);
+	}
 
-    if (ret  == 0) {
+    if (ret == 0) {
+		mdb_txn_commit(txn);
         return 1;
     } else {
+fail:
+		mdb_txn_abort(txn);
         return 0;
     }
 }
@@ -883,23 +867,35 @@ static void process_stat(conn *c, token_t *tokens, const size_t ntokens) {
 
 /* ntokens is overwritten here... shrug.. */
 static inline void process_get_command(conn *c, token_t *tokens, size_t ntokens) {
-    char *key;
-    size_t nkey;
-    int i = 0;
-    item *it = NULL;
+    int ret;
+    item it;
     token_t *key_token = &tokens[KEY_TOKEN];
     int stats_get_cmds   = 0;
     int stats_get_hits   = 0;
     int stats_get_misses = 0;
+	MDB_txn *txn;
+    MDB_cursor *cursorp;
     assert(c != NULL);
+
+    /* transaction and cursor */
+    ret = mdb_txn_begin(env, NULL, MDB_RDONLY, &txn);
+    if (ret != 0) {
+        fprintf(stderr, "mdb_txn_begin: %s\n", mdb_strerror(ret));
+        out_string(c, "SERVER_ERROR mdb_txn_begin");
+        return;
+    }
+
+    /* Get a cursor */
+    ret = mdb_cursor_open(txn, dbi, &cursorp);
+    if (ret != 0) {
+        fprintf(stderr, "mdb_cursor_open: %s\n", mdb_strerror(ret));
+        out_string(c, "SERVER_ERROR mdb_cursor_open");
+        return;
+    }
 
     do {
         while(key_token->length != 0) {
-
-            key = key_token->value;
-            nkey = key_token->length;
-
-            if(nkey > KEY_MAX_LENGTH) {
+            if(key_token->length > KEY_MAX_LENGTH) {
                 STATS_LOCK();
                 stats.get_cmds   += stats_get_cmds;
                 stats.get_hits   += stats_get_hits;
@@ -911,21 +907,9 @@ static inline void process_get_command(conn *c, token_t *tokens, size_t ntokens)
 
             stats_get_cmds++;
             
-            it = item_get(key, nkey);
+            ret = item_cget(cursorp, (MDB_val *)key_token, &it, MDB_SET_KEY);
 
-            if (it) {
-                if (i >= c->isize) {
-                    item **new_list = realloc(c->ilist, sizeof(item *) * c->isize * 2);
-                    if (new_list) {
-                        c->isize *= 2;
-                        c->ilist = new_list;
-                    } else { 
-                        item_free(it);
-                        it = NULL;
-                        break;
-                    }
-                }
-
+            if (!ret) {
                 /*
                  * Construct the response. Each hit adds three elements to the
                  * outgoing data list:
@@ -935,21 +919,16 @@ static inline void process_get_command(conn *c, token_t *tokens, size_t ntokens)
                  */
 
                 if (add_iov(c, "VALUE ", 6) != 0 ||
-                   add_iov(c, ITEM_key(it), it->nkey) != 0 ||
-                   add_iov(c, ITEM_suffix(it), it->nsuffix + it->nbytes) != 0)
+                   add_iov(c, it.key.mv_data, it.key.mv_size) != 0 ||
+                   add_iov(c, ITEM_suffix(&it), it.data.mv_size-1) != 0)
                    {
-                       item_free(it);
-                       it = NULL;
                        break;
                    }
 
                 if (settings.verbose > 1)
-                    fprintf(stderr, ">%d sending key %s\n", c->sfd, ITEM_key(it));
+                    fprintf(stderr, ">%d sending key %s\n", c->sfd, (char *)it.key.mv_data);
 
                 stats_get_hits++;
-                *(c->ilist + i) = it;
-                i++;
-
             } else {
                 stats_get_misses++;
             }
@@ -968,8 +947,7 @@ static inline void process_get_command(conn *c, token_t *tokens, size_t ntokens)
 
     } while(key_token->value != NULL);
 
-    c->icurr = c->ilist;
-    c->ileft = i;
+	mdb_cursor_close(cursorp);
 
     if (settings.verbose > 1)
         fprintf(stderr, ">%d END\n", c->sfd);
@@ -1002,13 +980,13 @@ static inline void process_rget_command(conn *c, token_t *tokens, size_t ntokens
     bool is_right_open;
     uint32_t max_items;
     
-    MDB_txn *txn = NULL;
-    MDB_cursor *cursorp = NULL;
-	MDB_val *start, *end, itv;
+    MDB_txn *txn;
+    MDB_cursor *cursorp;
+	MDB_val *start, *end;
     
     int i = 0;
     int ret = 0;
-    item *it = NULL;
+    item it;
     bool is_left_checked = false;
 
     assert(c != NULL);
@@ -1016,7 +994,7 @@ static inline void process_rget_command(conn *c, token_t *tokens, size_t ntokens
 	start = (MDB_val *)&tokens[1];
 	end = (MDB_val *)&tokens[2];
 
-    if(start.mv_size > KEY_MAX_LENGTH || end.mv_size > KEY_MAX_LENGTH) {
+    if(start->mv_size > KEY_MAX_LENGTH || end->mv_size > KEY_MAX_LENGTH) {
         out_string(c, "CLIENT_ERROR bad command line format");
         return;
     }
@@ -1046,40 +1024,21 @@ static inline void process_rget_command(conn *c, token_t *tokens, size_t ntokens
         return;
     }
     
-    it = item_cget(cursorp, start, MDB_SET_RANGE);
+    ret = item_cget(cursorp, start, &it, MDB_SET_RANGE);
 
-    while(it) {
-		itv.mv_data = ITEM_key(it);
-		itv.mv_size = it->nkey;
+    while(!ret) {
         /* skip first item? */
         if (!is_left_checked && is_left_open &&
-             0 == mdb_cmp(txn, dbi, start, &itv)){
-            item_free(it);
-            it = NULL;
+             0 == mdb_cmp(txn, dbi, start, &it.key)){
             is_left_checked = true;
-            it = item_cget(cursorp, NULL, 0, DB_NEXT);
+            ret = item_cget(cursorp, NULL, &it, MDB_NEXT);
             continue;
         }
     
         /* got the end? */
-        ret = mdb_cmp(txn, dbi, end, &itv);
+        ret = mdb_cmp(txn, dbi, end, &it.key);
         if (ret < 0 || (ret == 0 && is_right_open)){
-            item_free(it);
-            it = NULL;
             break;
-        }
-                
-        /* let valid item out */
-        if (i >= c->isize) {
-            item **new_list = realloc(c->ilist, sizeof(item *) * c->isize * 2);
-            if (new_list) {
-                c->isize *= 2;
-                c->ilist = new_list;
-            } else { 
-                item_free(it);
-                it = NULL;
-                break;
-            }
         }
         
         /*
@@ -1091,36 +1050,27 @@ static inline void process_rget_command(conn *c, token_t *tokens, size_t ntokens
          */
         
         if (add_iov(c, "VALUE ", 6) != 0 ||
-           add_iov(c, ITEM_key(it), it->nkey) != 0 ||
-           add_iov(c, ITEM_suffix(it), it->nsuffix + it->nbytes) != 0)
+           add_iov(c, it.key.mv_data, it.key.mv_size) != 0 ||
+           add_iov(c, ITEM_suffix(&it), it.data.mv_size-1) != 0)
            {
-               item_free(it);
-               it = NULL;
                break;
            }
         
         if (settings.verbose > 1)
-            fprintf(stderr, ">%d sending key %s\n", c->sfd, ITEM_key(it));
+            fprintf(stderr, ">%d sending key %s\n", c->sfd, ITEM_key(&it));
         
-        *(c->ilist + i) = it;
         i++;
         /* got enough? */
         if (i == max_items){
             break;
         }
         /* move to the next item */    
-        it = item_cget(cursorp, NULL, MDB_NEXT);
+        ret = item_cget(cursorp, NULL, &it, MDB_NEXT);
     }
     
     if (cursorp != NULL){
         mdb_cursor_close(cursorp);
     }
-
-    /* txn end */
-    ret = mdb_txn_abort(txn);
-    
-    c->icurr = c->ilist;
-    c->ileft = i;
 
     if (settings.verbose > 1)
         fprintf(stderr, ">%d END\n", c->sfd);
@@ -1138,6 +1088,9 @@ static inline void process_rget_command(conn *c, token_t *tokens, size_t ntokens
         c->msgcurr = 0;
     }
 
+    /* txn end */
+    mdb_txn_abort(txn);
+    
     return;
 }
 
@@ -1179,7 +1132,7 @@ static void process_update_command(conn *c, token_t *tokens, const size_t ntoken
 
     c->item = it;
     c->ritem = ITEM_data(it);
-    c->rlbytes = it->nbytes;
+    c->rlbytes = ITEM_dlen(it);
     c->item_comm = comm;
     conn_set_state(c, conn_nread);
 }
@@ -1187,8 +1140,7 @@ static void process_update_command(conn *c, token_t *tokens, const size_t ntoken
 static void process_arithmetic_command(conn *c, token_t *tokens, const size_t ntokens, const bool incr) {
     char temp[sizeof("18446744073709551615")];
     int64_t delta;
-    char *key;
-    size_t nkey;
+	MDB_val *key;
 
     assert(c != NULL);
 
@@ -1197,8 +1149,7 @@ static void process_arithmetic_command(conn *c, token_t *tokens, const size_t nt
         return;
     }
 
-    key = tokens[KEY_TOKEN].value;
-    nkey = tokens[KEY_TOKEN].length;
+    key = (MDB_val *)&tokens[KEY_TOKEN];
 
     delta = strtoll(tokens[2].value, NULL, 10);
 
@@ -1207,7 +1158,7 @@ static void process_arithmetic_command(conn *c, token_t *tokens, const size_t nt
         return;
     }
 
-    out_string(c, add_delta(incr, delta, temp, key, nkey));
+    out_string(c, add_delta(incr, delta, temp, key));
 }
 
 /*
@@ -1220,29 +1171,39 @@ static void process_arithmetic_command(conn *c, token_t *tokens, const size_t nt
  *
  * returns a response string to send back to the client.
  */
-char *do_add_delta(const bool incr, const int64_t delta, char *buf, char *key, size_t nkey) {
-    char *ptr;
+char *do_add_delta(const bool incr, const int64_t delta, char *buf, MDB_val *key) {
+    char *ptr, *msg;
     int64_t value;
     int vlen, flags, ret;
-    item *old_it = NULL;
-    item *new_it = NULL;
+    item old_it;
+    item new_it;
+    MDB_txn *txn;
 
-    /* get orignal item */
-    old_it = item_get(key, nkey);
-    if (old_it == NULL){
-        return "NOT_FOUND";
+    /* transaction and cursor */
+    ret = mdb_txn_begin(env, NULL, 0, &txn);
+    if (ret != 0) {
+        fprintf(stderr, "mdb_txn_begin: %s\n", mdb_strerror(ret));
+        return "SERVER_ERROR out of memory processing arithmetic";
     }
 
-    /* get orignal digital value */
-    ptr = ITEM_data(old_it);
+    /* get original item */
+    ret = item_get(txn, key, &old_it);
+    if (ret){
+        msg = "NOT_FOUND";
+		goto fail;
+    }
+
+    /* get original digital value */
+    ptr = ITEM_data(&old_it);
     while ((*ptr != '\0') && (*ptr < '0' && *ptr > '9')) ptr++;   // BUG: can't be true
     /* non-digit will cause strtoull stop :) This is a triky. */
     value = strtoull(ptr, NULL, 10);
     if(errno == ERANGE) {
-        return "CLIENT_ERROR cannot increment or decrement non-numeric value";
+        msg = "CLIENT_ERROR cannot increment or decrement non-numeric value";
+		goto fail;
     }
 
-    /* cacl new value */
+    /* calc new value */
     if (incr)
         value += delta;
     else {
@@ -1252,45 +1213,46 @@ char *do_add_delta(const bool incr, const int64_t delta, char *buf, char *key, s
     vlen = sprintf(buf, "%"PRId64, value);
 
     /* flags was already lost - so recover them from ITEM_suffix(it) */
-    flags = (int) strtol(ITEM_suffix(old_it), (char **) NULL, 10);
+    flags = (int) strtol(ITEM_suffix(&old_it), (char **) NULL, 10);
             
     /* construct new item */
-    new_it = item_alloc1(key, nkey, flags, vlen + 2);
-    if (new_it == NULL) {
+    ret = item_alloc_put(txn, key, flags, vlen + 2, &new_it);
+    if (ret) {
         /* SERVER_ERROR out of memory */
-        if (old_it != NULL)
-            item_free(old_it);
-        return "SERVER_ERROR out of memory processing arithmetic";
+        msg = "SERVER_ERROR out of memory processing arithmetic";
+		goto fail;
     }
-    memcpy(ITEM_data(new_it), buf, vlen);
-    memcpy(ITEM_data(new_it) + vlen, "\r\n", 2);
+    memcpy(ITEM_data(&new_it), buf, vlen);
+    memcpy(ITEM_data(&new_it) + vlen, "\r\n", 2);
     
-    /* put new item into storage */
-    ret = item_put(key, nkey, new_it);
-
-    if (old_it != NULL)
-        item_free(old_it);
-    if (new_it != NULL)
-        item_free(new_it);
-
     if (ret != 0) {
-        return "SERVER_ERROR while put a item";
-    }   
+fail:
+		mdb_txn_abort(txn);
+		return msg;
+    } else {
+		mdb_txn_commit(txn);
+	}
     return buf;
 }
 
 static void process_delete_command(conn *c, token_t *tokens, const size_t ntokens) {
-    char *key;
-    size_t nkey;
+    MDB_val *key;
     int ret;
+    MDB_txn *txn;
+
     assert(c != NULL);
-    key = tokens[KEY_TOKEN].value;
-    nkey = tokens[KEY_TOKEN].length;
-    if(nkey > KEY_MAX_LENGTH) {
+    key = (MDB_val *)&tokens[KEY_TOKEN];
+    if(key->mv_size > KEY_MAX_LENGTH) {
         out_string(c, "CLIENT_ERROR bad command line format");
         return;
     }
-    switch (ret = item_delete(key, nkey)) {
+    /* transaction and cursor */
+    ret = mdb_txn_begin(env, NULL, 0, &txn);
+    if (ret != 0) {
+        fprintf(stderr, "mdb_txn_begin: %s\n", mdb_strerror(ret));
+        return;
+    }
+    switch (ret = item_delete(txn, key)) {
     case 0:
         out_string(c, "DELETED");
         break;
@@ -1303,6 +1265,7 @@ static void process_delete_command(conn *c, token_t *tokens, const size_t ntoken
     default:
         out_string(c, "SERVER_ERROR nothing to do");
     }
+	mdb_txn_commit(txn);
     return;
 }
 
@@ -1321,49 +1284,6 @@ static void process_verbosity_command(conn *c, token_t *tokens, const size_t nto
     return;
 }
 
-static void process_rep_command(conn *c, token_t *tokens, const size_t ntokens) {
-
-    assert(c != NULL);
-
-    if (bdb_settings.is_replicated){
-        if (ntokens == 3 && strcmp(tokens[COMMAND_TOKEN].value, "rep_set_priority") == 0){
-            int priority;
-            priority = strtoul(tokens[1].value, NULL, 10);
-            if(errno == ERANGE || priority < 0) {
-                out_string(c, "CLIENT_ERROR bad command line format");
-                return;
-            }
-            bdb_settings.rep_priority = priority > MAX_REP_PRIORITY ? MAX_REP_PRIORITY : priority;
-            if (env->rep_set_priority(env, bdb_settings.rep_priority) != 0){
-                out_string(c, "SERVER_ERROR env->rep_set_priority");
-                return;
-            }
-            out_string(c, "OK");
-            return;
-
-        } else if (ntokens == 3 && strcmp(tokens[COMMAND_TOKEN].value, "rep_set_ack_policy") == 0){
-            int ack_policy;
-            ack_policy = strtoul(tokens[1].value, NULL, 10);
-            if(errno == ERANGE || ack_policy <= 0) {
-                out_string(c, "CLIENT_ERROR bad command line format");
-                return;
-            }
-            bdb_settings.rep_ack_policy = ack_policy > MAX_REP_ACK_POLICY ? MAX_REP_ACK_POLICY : ack_policy;
-            if (env->repmgr_set_ack_policy(env, bdb_settings.rep_ack_policy) != 0){
-                out_string(c, "SERVER_ERROR env->repmgr_set_ack_policy");
-                return;
-            }
-            out_string(c, "OK");
-            return;
-
-        }else {
-            out_string(c, "ERROR");
-        }
-    } else {
-        out_string(c, "ERROR");
-    }
-    return;
-}
 
 static void process_mdb_command(conn *c, token_t *tokens, const size_t ntokens) {
 	int ret;
@@ -1891,12 +1811,6 @@ static void drive_machine(conn *c) {
             switch (transmit(c)) {
             case TRANSMIT_COMPLETE:
                 if (c->state == conn_mwrite) {
-                    while (c->ileft > 0) {
-                        item *it = *(c->icurr);
-                        item_free(it);
-                        c->icurr++;
-                        c->ileft--;
-                    }
                     conn_set_state(c, conn_read);
                 } else if (c->state == conn_write) {
                     if (c->write_and_free) {
@@ -2481,13 +2395,13 @@ int main (int argc, char **argv) {
             } 
             break;
         case 'H':
-            bdb_settings.env_home = optarg;
+            mdb_settings.env_home = optarg;
             break;
         case 'C':
-            bdb_settings.chkpoint_val = atoi(optarg);
+            mdb_settings.chkpoint_val = atoi(optarg);
             break;
         case 'N':
-            bdb_settings.txn_nosync = 1;
+            mdb_settings.txn_nosync = 1;
             break;
 
         default:

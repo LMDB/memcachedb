@@ -1,12 +1,12 @@
 What is MemcacheDB?
 *******************
-MemcacheDB is a distributed key-value storage system designed for persistent. It is NOT a cache solution, but a persistent storage engine for fast and reliable key-value based object storage and retrieval. It conforms to memcache protocol(not completed, see below), so any memcached client can have connectivity with it. MemcacheDB uses Berkeley DB as a storing backend, so lots of features including transaction and replication are supported. 
+MemcacheDB is a distributed key-value storage system designed for persistence. It is NOT a cache solution, but a persistent storage engine for fast and reliable key-value based object storage and retrieval. It conforms to memcache protocol(not completed, see below), so any memcached client can have connectivity with it. MemcacheDB uses OpenLDAP MDB as a storing backend, which provides full
+transaction support.
 
 Features
 ********
 * High performance read/write for a key-value based object
 * High reliable persistent storage with transaction
-* High availability data storage with replication
 * Memcache protocol compatibility
 
 Supported memcache commands
@@ -22,15 +22,10 @@ Private commands
 ****************
 rget
 db_checkpoint
-db_archive
-rep_set_priority
-stats rep
-stats repmgr
-stats repms
 
 Some Warning
 ************
-Expire time has been discarded in MemcacheDB(we are for persistent:p), so you should not use any corresponding features of clients. The daemon does nothing while you give a expire time to an item.
+Expire time has been discarded in MemcacheDB(we are for persistence:p), so you should not use any corresponding features of clients. The daemon does nothing while you give a expire time to an item.
 
-For more info, see: http://memcachedb.org
+For more info, see: https://gitorious.org/mdb/memcachedb
 

@@ -1,5 +1,9 @@
 /*
- *  MemcacheDB - A distributed key-value storage system designed for persistent:
+ *  MemcacheDB - A distributed key-value storage system designed for persistence:
+ *
+ *      https://gitorious.org/mdb/memcachedb
+ *
+ *  Based on the BerkeleyDB version at:
  *
  *      http://memcachedb.googlecode.com
  *
@@ -7,6 +11,7 @@
  *
  *      http://danga.com/memcached/
  *
+ *  Copyright 2012 Howard Chu.  All rights reserved.
  *  Copyright 2008 Steve Chu.  All rights reserved.
  *
  *  Use and distribution licensed under the BSD license.  See
@@ -14,6 +19,7 @@
  *
  *  Authors:
  *      Steve Chu <stvchu@gmail.com>
+ *      Howard Chu <hyc@symas.com>
  *
  */
  
@@ -93,6 +99,8 @@ int do_item_add_to_freelist(item *it) {
     return 1;
 }
 
+#define SUFFLEN	40
+
 /**
  * Generates the variable-sized part of the header for an object.
  *
@@ -107,19 +115,18 @@ int do_item_add_to_freelist(item *it) {
  */
 static size_t item_make_header(const uint8_t nkey, const int flags, const int nbytes,
                      char *suffix, uint8_t *nsuffix) {
-    /* suffix is defined at 40 chars elsewhere.. */
-    *nsuffix = (uint8_t) snprintf(suffix, 40, " %d %d\r\n", flags, nbytes - 2);
+    *nsuffix = (uint8_t) snprintf(suffix, SUFFLEN, " %d %d\r\n", flags, nbytes - 2);
     return sizeof(item) + nkey + *nsuffix + nbytes;
 }
 
 /*
  * alloc a item buffer, and init it.
  */
-item *item_alloc1(char *key, const size_t nkey, const int flags, const int nbytes) {
+item *item_alloc1(MDB_val *key, const int flags, const int nbytes) {
     uint8_t nsuffix;
     item *it;
-    char suffix[40];
-    size_t ntotal = item_make_header(nkey + 1, flags, nbytes, suffix, &nsuffix);
+    char suffix[SUFFLEN];
+    size_t ntotal = item_make_header(key->mv_size + 1, flags, nbytes, suffix, &nsuffix);
 
     if (ntotal > settings.item_buf_size){
         it = (item *)malloc(ntotal);
@@ -140,11 +147,13 @@ item *item_alloc1(char *key, const size_t nkey, const int flags, const int nbyte
         }
     }
 
-    it->nkey = nkey;
-    it->nbytes = nbytes;
-    strcpy(ITEM_key(it), key);
+    it->key.mv_size = key->mv_size;
+	it->key.mv_data = (void *)(it+1);
+	it->data.mv_size = nbytes + nsuffix + 1;
+	it->data.mv_data = (char *)it->key.mv_data + key->mv_size+1;
+    strcpy(ITEM_key(it), key->mv_data);
     memcpy(ITEM_suffix(it), suffix, (size_t)nsuffix);
-    it->nsuffix = nsuffix;
+    ITEM_suflen(it) = nsuffix;
     return it;
 }
 
@@ -176,6 +185,27 @@ item *item_alloc2(size_t ntotal) {
 }
 
 /*
+ * alloc a item buffer, and init it.
+ */
+int item_alloc_put(MDB_txn *txn, MDB_val *key, const int flags, const int nbytes, item *it) {
+    uint8_t nsuffix;
+    char suffix[SUFFLEN];
+	int ret;
+
+	it->key = *key;
+    it->data.mv_size = item_make_header(0, flags, nbytes, suffix, &nsuffix) - sizeof(item);
+	ret = mdb_put(txn, dbi, key, &it->data, MDB_RESERVE);
+	if (!ret) {
+		memcpy(ITEM_suffix(it), suffix, (size_t)nsuffix);
+		ITEM_suflen(it) = nsuffix;
+	}
+    return ret;
+}
+
+/*
+ * alloc a item buffer only.
+ */
+/*
  * free a item buffer. here 'it' must be a full item.
  */
 
@@ -206,186 +236,79 @@ int item_free(item *it) {
     return 0;
 }
 
-/* if return item is not NULL, free by caller */
-item *item_get(char *key, size_t nkey){
-    item *it = NULL;
-    DBT dbkey, dbdata;
-    bool stop;
+int item_get(MDB_txn *txn, MDB_val *key, item *it) {
     int ret;
     
-    /* first, alloc a fixed size */
-    it = item_alloc2(settings.item_buf_size);
-    if (it == 0) {
-        return NULL;
-    }
-
-    BDB_CLEANUP_DBT();
-    dbkey.data = key;
-    dbkey.size = nkey;
-    dbdata.ulen = settings.item_buf_size;
-    dbdata.data = it;
-    dbdata.flags = DB_DBT_USERMEM;
-
-    stop = false;
-    /* try to get a item from bdb */
-    while (!stop) {
-        switch (ret = dbp->get(dbp, NULL, &dbkey, &dbdata, 0)) {
-        case DB_BUFFER_SMALL:    /* user mem small */
-            /* free the original smaller buffer */
-            item_free(it);
-            /* alloc the correct size */
-            it = item_alloc2(dbdata.size);
-            if (it == NULL) {
-                return NULL;
-            }
-            dbdata.ulen = dbdata.size;
-            dbdata.data = it;
-            break;
-        case 0:                  /* Success. */
-            stop = true;
-            break;
-        case DB_NOTFOUND:
-            stop = true;
-            item_free(it);
-            it = NULL;
-            break;
-        default:
-            /* TODO: may cause bug here, if return DB_BUFFER_SMALL then retun non-zero again
-             * here 'it' may not a full one. a item buffer larger than item_buf_size may be added to freelist */
-            stop = true;
-            item_free(it);
-            it = NULL;
-            if (settings.verbose > 1) {
-                fprintf(stderr, "dbp->get: %s\n", db_strerror(ret));
-            }
-        }
-    }
-    return it;
+    /* try to get a item from mdb */
+	ret = mdb_get(txn, dbi, key, &it->data);
+	if (!ret) {
+		it->key = *key;
+		return 0;
+	}
+	if (ret == MDB_NOTFOUND)
+		return 1;
+	if (settings.verbose > 1) {
+		fprintf(stderr, "mdb_get: %s\n", mdb_strerror(ret));
+	}
+    return -1;
 }
 
-item *item_cget(DBC *cursorp, char *start, size_t nstart, u_int32_t flags){
-    item *it = NULL;
-    DBT dbkey, dbdata;
-    bool stop;
-    int ret;
-    
-    /* first, alloc a fixed size */
-    it = item_alloc2(settings.item_buf_size);
-    if (it == 0) {
-        return NULL;
-    }
-
-    BDB_CLEANUP_DBT();
-    dbkey.data = start;
-    dbkey.size = nstart;
-    dbkey.dlen = 0;
-    dbkey.doff = 0;
-    dbkey.flags = DB_DBT_PARTIAL;
-    dbdata.ulen = settings.item_buf_size;
-    dbdata.data = it;
-    dbdata.flags = DB_DBT_USERMEM;
-
-    stop = false;
-    /* try to get a item from bdb */
-    while (!stop) {
-        switch (ret = cursorp->get(cursorp, &dbkey, &dbdata, flags)) {
-        case DB_BUFFER_SMALL:    /* user mem small */
-            if (settings.verbose > 1) {
-                fprintf(stderr, "cursorp->get: %s\n", db_strerror(ret));
-            }
-            /* free the original smaller buffer */
-            item_free(it);
-            /* alloc the correct size */
-            it = item_alloc2(dbdata.size);
-            if (it == NULL) {
-                return NULL;
-            }
-            dbkey.data = start;
-            dbkey.size = nstart;
-            dbdata.ulen = dbdata.size;
-            dbdata.data = it;
-            break;
-        case 0:                  /* Success. */
-            stop = true;
-            break;
-        case DB_NOTFOUND:
-            stop = true;
-            item_free(it);
-            it = NULL;
-            break;
-        default:
-            /* TODO: may cause bug here, if return DB_BUFFER_SMALL then retun non-zero again
-             * here 'it' may not a full one. a item buffer larger than item_buf_size may be added to freelist */
-            stop = true;
-            item_free(it);
-            it = NULL;
-            if (settings.verbose > 1) {
-                fprintf(stderr, "cursorp->get: %s\n", db_strerror(ret));
-            }
-        }
-    }
-    return it;    
+int item_cget(MDB_cursor *cursorp, MDB_val *key, item *it, u_int32_t flags){
+	int ret;
+    /* try to get a item from mdb */
+	ret = mdb_cursor_get(cursorp, key, &it->data, flags);
+	if (!ret) {
+		it->key = *key;
+		return 0;
+	}
+	if (ret == MDB_NOTFOUND)
+		return 1;
+	if (settings.verbose > 1) {
+		fprintf(stderr, "mdb_cursor_get: %s\n", mdb_strerror(ret));
+	}
+	return -1;
 }
 
 /* 0 for Success
    -1 for SERVER_ERROR
 */
-int item_put(char *key, size_t nkey, item *it){
-    int ret;
-    DBT dbkey, dbdata;
-
-    BDB_CLEANUP_DBT();
-    dbkey.data = key;
-    dbkey.size = nkey;
-    dbdata.data = it;
-    dbdata.size = ITEM_ntotal(it);
-    ret = dbp->put(dbp, NULL, &dbkey, &dbdata, 0);
-    if (ret == 0) {
-        return 0;
-    } else {
-        if (settings.verbose > 1) {
-            fprintf(stderr, "dbp->put: %s\n", db_strerror(ret));
-        }
-        return -1;
-    }
+int item_put(MDB_txn *txn, item *it){
+	int ret;
+	ret = mdb_put(txn, dbi, &it->key, &it->data, 0);
+	if (!ret)
+		return 0;
+	if (settings.verbose > 1) {
+		fprintf(stderr, "mdb_put: %s\n", mdb_strerror(ret));
+	}
+	return -1;
 }
 
 /* 0 for Success
    1 for NOT_FOUND
    -1 for SERVER_ERROR
 */
-int item_delete(char *key, size_t nkey){
-    int ret;
-    DBT dbkey;
-    
-    memset(&dbkey, 0, sizeof(dbkey));
-    dbkey.data = key;
-    dbkey.size = nkey;
-    ret = dbp->del(dbp, NULL, &dbkey, 0);
-    if (ret == 0){
+int item_delete(MDB_txn *txn, MDB_val *key) {
+	int ret;
+    ret = mdb_del(txn, dbi, key, NULL);
+    if (ret == 0)
         return 0;
-    }else if(ret == DB_NOTFOUND){
+    if(ret == MDB_NOTFOUND)
         return 1;
-    }else{
-        if (settings.verbose > 1) {
-            fprintf(stderr, "dbp->del: %s\n", db_strerror(ret));
-        }
-        return -1;
+    if (settings.verbose > 1) {
+        fprintf(stderr, "mdb_del: %s\n", mdb_strerror(ret));
     }
+    return -1;
 }
 
 /*
 1 for exists
 0 for non-exist
 */
-int item_exists(char *key, size_t nkey){
+int item_exists(MDB_txn *txn, MDB_val *key) {
     int ret;
-    DBT dbkey;
+	MDB_val data;
     
-    memset(&dbkey, 0, sizeof(dbkey));
-    dbkey.data = key;
-    dbkey.size = nkey;
-    ret = dbp->exists(dbp, NULL, &dbkey, 0);
+    ret = mdb_get(txn, dbi, key, &data);
     if (ret == 0){
         return 1;
     }
