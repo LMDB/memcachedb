@@ -215,7 +215,7 @@ int item_free(item *it) {
         return 0;
 
     /* ntotal may be wrong, if 'it' is not a full item. */
-    ntotal = ITEM_ntotal(it);
+    ntotal = it->data.mv_size;
     if (ntotal > settings.item_buf_size){
         if (settings.verbose > 1) {
             fprintf(stderr, "ntotal: %"PRIuS", use free() directly.\n", ntotal);

@@ -2400,6 +2400,9 @@ int main (int argc, char **argv) {
         case 'H':
             mdb_settings.env_home = optarg;
             break;
+        case 'm':
+            mdb_settings.cache_size = atoi(optarg) * 1024uLL * 1024uLL;
+            break;
         case 'C':
             mdb_settings.chkpoint_val = atoi(optarg);
             break;

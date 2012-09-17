@@ -140,7 +140,7 @@ struct mdb_settings {
     char *env_home;    /* db env home dir path */
     int txn_nosync;    /* DB_TXN_NOSYNC flag, if 1 will lose transaction's durability for performance */
     int chkpoint_val;  /* do checkpoint every *db_chkpoint_val* second, 0 for disable */
-    u_int32_t db_flags; /* database open flags */
+    u_int64_t cache_size; /* cache size */
     u_int32_t env_flags; /* env open flags */
 };
 
