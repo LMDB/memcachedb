@@ -281,8 +281,8 @@ conn *do_conn_from_freelist();
 bool do_conn_add_to_freelist(conn *c);
 conn *conn_new(const int sfd, const int init_state, const int event_flags, const int read_buffer_size, const bool is_udp, struct event_base *base);
 
-char *do_add_delta(const bool incr, const int64_t delta, char *buf, MDB_val *key);
-int do_store_item(item *item, int comm);
+char *add_delta(const bool incr, const int64_t delta, char *buf, MDB_val *key);
+int store_item(item *item, int comm);
 
 /*
  * In multithreaded mode, we wrap certain functions with lock management and
@@ -304,7 +304,6 @@ int  dispatch_event_add(int thread, conn *c);
 void dispatch_conn_new(int sfd, int init_state, int event_flags, int read_buffer_size, int is_udp);
 
 /* Lock wrappers for cache functions that are called from main loop. */
-char *mt_add_delta(const int incr, const int64_t delta, char *buf, MDB_val *key);
 conn *mt_conn_from_freelist(void);
 bool  mt_conn_add_to_freelist(conn *c);
 int   mt_is_listen_thread(void);
@@ -312,22 +311,18 @@ item *mt_item_from_freelist(void);
 int mt_item_add_to_freelist(item *it);
 void  mt_stats_lock(void);
 void  mt_stats_unlock(void);
-int   mt_store_item(item *item, int comm);
 
-# define add_delta(x,y,z,k)        mt_add_delta(x,y,z,k)
 # define conn_from_freelist()        mt_conn_from_freelist()
 # define conn_add_to_freelist(x)     mt_conn_add_to_freelist(x)
 # define is_listen_thread()          mt_is_listen_thread()
 # define item_from_freelist()        mt_item_from_freelist()
 # define item_add_to_freelist(x)     mt_item_add_to_freelist(x)
-# define store_item(x,y)             mt_store_item(x,y)
 
 # define STATS_LOCK()                mt_stats_lock()
 # define STATS_UNLOCK()              mt_stats_unlock()
 
 #else /* !USE_THREADS */
 
-# define add_delta(x,y,z,k)         do_add_delta(x,y,z,k)
 # define conn_from_freelist()         do_conn_from_freelist()
 # define conn_add_to_freelist(x)      do_conn_add_to_freelist(x)
 # define dispatch_conn_new(x,y,z,a,b) conn_new(x,y,z,a,b,main_base)
@@ -335,7 +330,6 @@ int   mt_store_item(item *item, int comm);
 # define is_listen_thread()           1
 # define item_from_freelist()         do_item_from_freelist()
 # define item_add_to_freelist(x)      do_item_add_to_freelist(x)
-# define store_item(x,y)              do_store_item(x,y)
 # define thread_init(x,y)             0
 
 # define STATS_LOCK()                /**/

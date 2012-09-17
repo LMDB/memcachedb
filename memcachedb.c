@@ -656,7 +656,7 @@ static void complete_nread(conn *c) {
  *
  * Returns true if the item was stored.
  */
-int do_store_item(item *it, int comm) {
+int store_item(item *it, int comm) {
     int ret;
     item old_it;
     int stored = 0;
@@ -1171,7 +1171,7 @@ static void process_arithmetic_command(conn *c, token_t *tokens, const size_t nt
  *
  * returns a response string to send back to the client.
  */
-char *do_add_delta(const bool incr, const int64_t delta, char *buf, MDB_val *key) {
+char *add_delta(const bool incr, const int64_t delta, char *buf, MDB_val *key) {
     char *ptr, *msg;
     int64_t value;
     int vlen, flags, ret;

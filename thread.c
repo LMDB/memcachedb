@@ -1,5 +1,9 @@
 /*
- *  MemcacheDB - A distributed key-value storage system designed for persistent:
+ *  MemcacheDB - A distributed key-value storage system designed for persistence:
+ *
+ *      https://gitorious.org/mdb/memcachedb
+ *
+ *  Based on the BerkeleyDB version at:
  *
  *      http://memcachedb.googlecode.com
  *
@@ -7,6 +11,7 @@
  *
  *      http://danga.com/memcached/
  *
+ *  Copyright 2012 Howard Chu.  All rights reserved.
  *  Copyright 2008 Steve Chu.  All rights reserved.
  *
  *  Use and distribution licensed under the BSD license.  See
@@ -14,6 +19,7 @@
  *
  *  Authors:
  *      Steve Chu <stvchu@gmail.com>
+ *      Howard Chu <hyc@symas.com>
  *
  */
 
@@ -400,30 +406,6 @@ void dispatch_conn_new(int sfd, int init_state, int event_flags,
  */
 int mt_is_listen_thread() {
     return pthread_self() == threads[0].thread_id;
-}
-
-/*
- * Does arithmetic on a numeric item value.
- */
-char *mt_add_delta(int incr, const int64_t delta, char *buf, char *key, size_t nkey) {
-    char *ret;
-
-    pthread_mutex_lock(&bdb_lock);
-    ret = do_add_delta(incr, delta, buf, key, nkey);
-    pthread_mutex_unlock(&bdb_lock);
-    return ret;
-}
-
-/*
- * Stores an item in the bdb (high level, obeys set/add/replace semantics)
- */
-int mt_store_item(item *item, int comm) {
-    int ret;
-
-    pthread_mutex_lock(&bdb_lock);
-    ret = do_store_item(item, comm);
-    pthread_mutex_unlock(&bdb_lock);
-    return ret;
 }
 
 /******************************* GLOBAL STATS ******************************/

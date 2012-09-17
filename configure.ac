@@ -1,5 +1,5 @@
 AC_PREREQ(2.61)
-AC_INIT([memcachedb], [1.2.1], [stvchu@gmail.com])
+AC_INIT([memcachedb], [2.0.0], [hyc@symas.com])
 AM_INIT_AUTOMAKE([-Wall -Werror foreign])
 AC_PROG_CC
 AM_PROG_CC_C_O
@@ -87,20 +87,10 @@ if test $ac_cv_libevent_dir != "(system)"; then
   fi
 fi
 
-dnl Check BerkeleyDB lib and headers
-bdbdir="/usr/local/BerkeleyDB.4.7"
-AC_ARG_WITH(bdb,
-       [  --with-bdb=PATH         Specify path to BerkeleyDB installation ],
-       [
-                if test "x$withval" != "xno" ; then
-                        bdbdir=$withval
-                fi
-       ]
-)
-CPPFLAGS="-I$bdbdir/include $CPPFLAGS"
-LDFLAGS="-L$bdbdir/lib $LDFLAGS"
-AC_SEARCH_LIBS([db_create], [db], [] ,[AC_MSG_ERROR(cannot find libdb.so in $bdbdir/lib)])
-AC_CHECK_HEADERS([db.h], [] ,[AC_MSG_ERROR(cannot find db.h in $bdbdir/include)])
+dnl Check OpenLDAP MDB lib and header
+AC_CHECK_HEADER(mdb.h, [
+	AC_CHECK_LIB(mdb, mdb_env_create, [], AC_MSG_ERROR(cannot find libmdb.so))],
+	AC_MSG_ERROR(cannot find mdb.h))
 
 dnl ----------------------------------------------------------------------------
 
