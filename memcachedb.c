@@ -854,7 +854,7 @@ static void process_stat(conn *c, token_t *tokens, const size_t ntokens) {
         return;
     }
 
-    /* for bdb stats */
+    /* for mdb stats */
     if (strcmp(subcommand, "mdb") == 0) {
         char temp[512];
         stats_mdb(temp);
@@ -2555,8 +2555,8 @@ int main (int argc, char **argv) {
     /* enter the event loop */
     event_base_loop(main_base, 0);
     
-    /* cleanup bdb staff */
-    fprintf(stderr, "try to clean up bdb resource...\n");
+    /* cleanup mdb staff */
+    fprintf(stderr, "try to clean up mdb resource...\n");
     mdb_chkpoint();
 	mdb_shutdown();
     

@@ -69,9 +69,6 @@ static pthread_mutex_t conn_lock;
 /* Lock for item buffer freelist */
 static pthread_mutex_t ibuffer_lock;
 
-/* Lock for bdb */
-static pthread_mutex_t bdb_lock;
-
 /* Lock for global stats */
 static pthread_mutex_t stats_lock;
 
@@ -427,7 +424,6 @@ void mt_stats_unlock() {
 void thread_init(int nthreads, struct event_base *main_base) {
     int         i;
 
-    pthread_mutex_init(&bdb_lock, NULL);
     pthread_mutex_init(&ibuffer_lock, NULL);
     pthread_mutex_init(&conn_lock, NULL);
     pthread_mutex_init(&stats_lock, NULL);
