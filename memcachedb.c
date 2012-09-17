@@ -890,6 +890,7 @@ static inline void process_get_command(conn *c, token_t *tokens, size_t ntokens)
     if (ret != 0) {
         fprintf(stderr, "mdb_cursor_open: %s\n", mdb_strerror(ret));
         out_string(c, "SERVER_ERROR mdb_cursor_open");
+		mdb_txn_abort(txn);
         return;
     }
 
@@ -902,6 +903,8 @@ static inline void process_get_command(conn *c, token_t *tokens, size_t ntokens)
                 stats.get_misses += stats_get_misses;
                 STATS_UNLOCK();
                 out_string(c, "CLIENT_ERROR bad command line format");
+				mdb_cursor_close(cursorp);
+				mdb_txn_abort(txn);
                 return;
             }
 

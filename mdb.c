@@ -29,7 +29,7 @@ static pthread_t chk_ptid;
 void mdb_settings_init(void)
 {
     mdb_settings.env_home = DBHOME;
-    mdb_settings.cache_size = 256 * 1024 * 1024; /* default is 256MB */ 
+    mdb_settings.cache_size = 1 * 1024 * 1024 * 1024; /* default is 1GB */
     mdb_settings.txn_nosync = 0; /* default DB_TXN_NOSYNC is off */
     mdb_settings.chkpoint_val = 60 * 5;
     mdb_settings.db_flags = DB_CREATE | DB_AUTO_COMMIT;
