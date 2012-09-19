@@ -76,7 +76,7 @@ void mdb_setup(void){
 
     /* set DB_TXN_NOSYNC flag */
     if (mdb_settings.txn_nosync){
-        mdb_env_set_flags(env, MDB_MAPASYNC, 1);
+        mdb_env_set_flags(env, MDB_NOSYNC, 1);
     }
 
     if ((ret = mdb_txn_begin(env, NULL, 0, &txn)) != 0) {
