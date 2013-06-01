@@ -6,8 +6,8 @@
 /* Define to 1 if you have the <inttypes.h> header file. */
 #undef HAVE_INTTYPES_H
 
-/* Define to 1 if you have the `mdb' library (-lmdb). */
-#undef HAVE_LIBMDB
+/* Define to 1 if you have the `lmdb' library (-llmdb). */
+#undef HAVE_LIBLMDB
 
 /* do we have malloc.h? */
 #undef HAVE_MALLOC_H

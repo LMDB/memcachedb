@@ -87,10 +87,10 @@ if test $ac_cv_libevent_dir != "(system)"; then
   fi
 fi
 
-dnl Check OpenLDAP MDB lib and header
-AC_CHECK_HEADER(mdb.h, [
-	AC_CHECK_LIB(mdb, mdb_env_create, [], AC_MSG_ERROR(cannot find libmdb.so))],
-	AC_MSG_ERROR(cannot find mdb.h))
+dnl Check OpenLDAP LMDB lib and header
+AC_CHECK_HEADER(lmdb.h, [
+	AC_CHECK_LIB(lmdb, mdb_env_create, [], AC_MSG_ERROR(cannot find liblmdb.so))],
+	AC_MSG_ERROR(cannot find lmdb.h))
 
 dnl ----------------------------------------------------------------------------
 
