@@ -951,6 +951,7 @@ static inline void process_get_command(conn *c, token_t *tokens, size_t ntokens)
     } while(key_token->value != NULL);
 
 	mdb_cursor_close(cursorp);
+	mdb_txn_abort(txn);
 
     if (settings.verbose > 1)
         fprintf(stderr, ">%d END\n", c->sfd);
@@ -1024,6 +1025,7 @@ static inline void process_rget_command(conn *c, token_t *tokens, size_t ntokens
     if (ret != 0) {
         fprintf(stderr, "mdb_cursor_open: %s\n", mdb_strerror(ret));
         out_string(c, "SERVER_ERROR mdb_cursor_open");
+	mdb_txn_abort(txn);
         return;
     }
     

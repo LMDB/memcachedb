@@ -25,7 +25,7 @@
   
 #include "memcachedb.h"
 #include <stdlib.h>
-#include <mdb.h>
+#include <lmdb.h>
 
 void stats_mdb(char *temp){
     char *pos = temp;

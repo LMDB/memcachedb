@@ -19,7 +19,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <signal.h>
-#include <mdb.h>
+#include <lmdb.h>
 
 static void *mdb_chkpoint_thread __P((void *));
 

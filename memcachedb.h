@@ -34,7 +34,7 @@
 #include <event.h>
 #include <netdb.h>
 #include <inttypes.h>
-#include <mdb.h>
+#include <lmdb.h>
 
 #define DATA_BUFFER_SIZE 2048
 #define UDP_READ_BUFFER_SIZE 65536
