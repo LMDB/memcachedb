@@ -27,5 +27,5 @@ Some Warning
 ************
 Expire time has been discarded in MemcacheDB(we are for persistence:p), so you should not use any corresponding features of clients. The daemon does nothing while you give a expire time to an item.
 
-For more info, see: https://gitorious.org/mdb/memcachedb
+For more info, see: https://github.com/LMDB/memcachedb
 
